@@ -1,0 +1,57 @@
+{
+  "version": "1.0.0",
+  "cells": [
+    {
+      "type": "md",
+      "input": "# H2O GBM Tuning Tutorial for Flow\n\n## Arno Candel, PhD, Chief Architect, H2O.ai\n#### Ported to Flow by Lauren DiPerna, M.S., Jr. Data Scientist, H2O.ai\n\nIn this tutorial, we show how to build a well-tuned H2O GBM model for a supervised classification task. We specifically don't focus on feature engineering and use a small dataset to allow you to reproduce these results in a few minutes on a laptop. This script can be directly transferred to datasets that are hundreds of GBs large and H2O clusters with dozens of compute nodes.\n\nThis tutorial is also available in R and Python:\n* R users can download a [R Markdown](http://rmarkdown.rstudio.com) from [H2O's github repository](https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/tutorials/gbm/gbmTuning.Rmd).\n* Python users can download a [Jupyter Notebook](http://jupyter.org/) from [H2O's github repository](https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/tutorials/gbm/gbmTuning.ipynb).\n\n## How to Interact with this Tutorial\nTo run an individual cell in a flow file, confirm the cell is in Edit Mode (click on the cell to highlight it), then press Ctrl+Enter or click the Run button. To see all the keyboard shortcuts, click outside of this cell and then press the `h` key.\n\nEach cell will list what steps were taken to produce its output - these steps are provided only as a reference and are not steps you need to take.\n\n## Installation & Launch of H2O for Flow\nEither download H2O from [H2O.ai's website](http://h2o.ai/download) or install the latest version of H2O using the following command line code:\n\n1. [Download H2O](http://h2o.ai/download/). This is a zip file that contains everything you need to get started.\n\n    Or run the following from your command line:\n         curl -o h2o.zip http://download.h2o.ai/versions/h2o-3.8.3.3.zip\n2. From your terminal, run:\n         cd ~/Downloads\n         unzip h2o-3.8.3.3.zip\n         cd h2o-3.8.3.3\n         java -jar h2o.jar\n3. Point your browser to http://localhost:54321\n\n4. The next time you want to launch Flow, change into the directory that contains your H2O package from the command line, and run the JAR file.\n    *(note: if your H2O package is not in the Downloads folder, replace the following path  ~/Downloads/h2o-3.8.2.8 with the correct path to your h2o-3.8.3.3 package)*:\n         cd ~/Downloads/h2o-3.8.3.3\n         java -jar h2o.jar\n\n\n## Import the data into H2O \nEverything is scalable and distributed from now on. All processing is done on the fully multi-threaded and distributed H2O Java-based backend and can be scaled to large datasets on large compute clusters.\nHere, we use a small public dataset ([Titanic](https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/Titanic.html)), but you can use datasets that are hundreds of GBs large.\n\nFrom within the `ImportFiles` CS cell (shown below), a path can point to a local file, hdfs, s3, nfs, Hive, directories, etc."
+    },
+    {
+      "type": "cs",
+      "input": "importFiles"
+    },
+    {
+      "type": "cs",
+      "input": "importFiles [ \"http://s3.amazonaws.com/h2o-public-test-data/smalldata/gbm_test/titanic.csv\" ]\n\n# steps taken: \n# enter http://s3.amazonaws.com/h2o-public-test-data/smalldata/gbm_test/titanic.csv into the `Search` field\n# hit enter to add the file, click on the file to select it, and then click on `Import`"
+    },
+    {
+      "type": "cs",
+      "input": "setupParse paths: [ \"http://s3.amazonaws.com/h2o-public-test-data/smalldata/gbm_test/titanic.csv\" ]\n\n# click `Parse these files...`"
+    },
+    {
+      "type": "cs",
+      "input": "parseFiles\n  paths: [\"http://s3.amazonaws.com/h2o-public-test-data/smalldata/gbm_test/titanic.csv\"]\n  destination_frame: \"titanic.hex\"\n  parse_type: \"CSV\"\n  separator: 44\n  number_columns: 14\n  single_quotes: false\n  column_names: [\"pclass\",\"survived\",\"name\",\"sex\",\"age\",\"sibsp\",\"parch\",\"ticket\",\"fare\",\"cabin\",\"embarked\",\"boat\",\"body\",\"home.dest\"]\n  column_types: [\"Numeric\",\"Enum\",\"String\",\"Enum\",\"Numeric\",\"Numeric\",\"Numeric\",\"Numeric\",\"Numeric\",\"Enum\",\"Enum\",\"Numeric\",\"Numeric\",\"Enum\"]\n  delete_on_done: true\n  check_header: 1\n  chunk_size: 4194304\n\n\n# steps taken:\n# select `enum` from the `survived` response column's dropdown menu to convert it from an integer to a categorical factor\n# then click `Parse`"
+    },
+    {
+      "type": "cs",
+      "input": "getFrameSummary \"titanic.hex\"\n\n# steps taken: click on `View`"
+    },
+    {
+      "type": "md",
+      "input": "From now on, everything is generic and directly applies to most datasets. We assume that all feature engineering is done at this stage and focus on model tuning. For multi-class problems, you can look at the log loss or confusion matrix output instead of the auc, and for regression problems, you can look at the deviance or the mse.\n\n## Split the data for Machine Learning\nWe split the data into three pieces: 60% for training, 20% for validation, and 20% for final testing. \nHere, we use random splitting, but this assumes i.i.d. data. If this is not the case (e.g., when events span across multiple rows or data has a time structure), you'll have to sample your data non-randomly."
+    },
+    {
+      "type": "cs",
+      "input": "splitFrame \"titanic.hex\", [0.6,0.2], [\"titanic_training.hex_0.60\",\"titanic_validation.hex_0.20\",\"titanic_testing.hex_0.20\"], 1234\n\n# steps taken:\n# click on 'Split'\n# then within the output fields click on `Add a new split` to add a testing set split\n# enter in the ratio 0.60, 0.20, 0.20 for training, validation, and testing sets respectively\n# set the seed to 1234 \n# then click on `Create` to create the splits"
+    },
+    {
+      "type": "md",
+      "input": "## Establish baseline performance\nAs the first step, we'll build some default models to see what accuracy we can expect. Let's use the [AUC metric](http://mlwiki.org/index.php/ROC_Analysis) for this demo. It ranges from 0.5 for random models to 1 for perfect models.\n\n\nThe first model is a default GBM, trained on the 60% training split"
+    },
+    {
+      "type": "md",
+      "input": "The validation AUC is over 94%, so this model is highly predictive!"
+    },
+    {
+      "type": "cs",
+      "input": "runAutoML"
+    },
+    {
+      "type": "cs",
+      "input": "runAutoML {\"training_frame\":\"titanic_training.hex_0.60\",\"response_column\":\"survived\",\"validation_frame\":\"titanic_validation.hex_0.20\",\"seed\":-1,\"max_models\":0,\"max_runtime_secs\":10800,\"stopping_metric\":\"AUTO\",\"stopping_rounds\":3,\"stopping_tolerance\":-1}"
+    },
+    {
+      "type": "cs",
+      "input": "getLeaderboard \"AutoML_20170828_191637\""
+    }
+  ]
+}
